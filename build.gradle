@@ -6,10 +6,14 @@ apply plugin: 'application'
 repositories {
     mavenCentral()
     mavenLocal()
+    maven {
+        url "https://repo.akka.io/maven"
+    }
 }
 
 def versions = [
-        ScalaBinary: "2.13"
+        ScalaBinary: "2.13",
+        AkkaVersion: "2.9.0",
 ]
 
 dependencies {
