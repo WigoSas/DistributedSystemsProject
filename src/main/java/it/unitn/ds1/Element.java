@@ -13,4 +13,8 @@ public class Element implements Serializable {
         this.version = version;
     }
 
+    @Override
+    public String toString(){
+        return "(" + key + ":" + data + ",v" + version + ")";
+    }
 }

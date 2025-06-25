@@ -1,40 +1,23 @@
 package it.unitn.ds1;
 import akka.actor.ActorRef;
 import akka.actor.ActorSystem;
-import akka.actor.Props;
 
 import java.io.IOException;
 import java.util.*;
 
 public class Project {
-  final static int N_NODES = 10;
+  //final static int N_NODES = 10;
   final static int N_CLIENTS = 5;
   final static int REPLICATION_FACTOR = 5;
   final static int READ_QUORUM = 3;
   final static int WRITE_QUORUM = 3;
   final static int TIMEOUT = 1000;
 
-  public static void main(String[] args) throws IOException {
+  public static void main(String[] args) throws IOException, InterruptedException {
     // Create the actor system
     final ActorSystem system = ActorSystem.create("banksystem");
-
-    Set<Node.NodeGet> set = new HashSet<>();
-
-    Node.NodeGet n = new Node.NodeGet(2,23,ActorRef.noSender());
-    set.add(n);
-    boolean res = set.add(new Node.NodeGet(2,23,ActorRef.noSender()));
-    System.out.println(res);
-
-    Set<Node.NodeGet> set2 = new HashSet<>();
-    set2.addAll(set);
-
-    String x = set + "\n" + set2 + "\n" + set.equals(set2);
-    System.out.println(x);
-
-    set.remove(n);
-    System.out.println(x);
-
     SortedMap<Integer,ActorRef> group = new TreeMap<>();
+
     for(int i = 10; i<=100; i+=10){
       ActorRef ar = system.actorOf(Node.props(i,REPLICATION_FACTOR,READ_QUORUM,WRITE_QUORUM,TIMEOUT));
       group.put(i,ar);
@@ -45,7 +28,27 @@ public class Project {
       a.tell(init,ActorRef.noSender());
     }
 
-    System.out.println("PRESS TO CONTINUE");
+    Thread.sleep(100);
+    System.out.println("NODES INITIALISATION DONE. PRESS TO CONTINUE");
+    System.in.read();
+
+    List<ActorRef> clients = new ArrayList<>();
+    for(int i=1; i<=N_CLIENTS; i++){
+      clients.add(system.actorOf(Client.props(group,"CLIENT"+i)));
+    }
+
+    Thread.sleep(1500);
+    System.out.println("\nMULTIPLE CONCURRENT UPDATES ON DIFFERENT KEYS. PRESS TO CONTINUE");
+    System.in.read();
+
+    clients.get(0).tell(new Client.AskToUpdate(60,13,"water"),ActorRef.noSender());
+    clients.get(1).tell(new Client.AskToUpdate(60,37,"hydrogen"),ActorRef.noSender());
+    clients.get(2).tell(new Client.AskToUpdate(30,53,"iron"),ActorRef.noSender());
+    clients.get(3).tell(new Client.AskToUpdate(100,67,"ice"),ActorRef.noSender());
+    clients.get(4).tell(new Client.AskToUpdate(50,83,"granite"),ActorRef.noSender());
+
+    Thread.sleep(1500);
+    System.out.println("\nPRESS TO SEE THE RESULT");
     System.in.read();
 
     Node.Print p = new Node.Print();
@@ -53,18 +56,58 @@ public class Project {
       a.tell(p,ActorRef.noSender());
     }
 
-    ActorRef client = system.actorOf(Client.props(group,"Client"));
-
-
-    group.get(group.firstKey()).tell(new Node.Get(30),client);
-
-    System.out.println("PRESS TO CONTINUE");
+    Thread.sleep(100);
+    System.out.println("\nMULTIPLE CONCURRENT GETS, ALSO ON THE SAME KEY.PRESS TO CONTINUE");
     System.in.read();
 
-    group.get(50).tell(new Node.Get(190),client);
+    clients.get(0).tell(new Client.AskToGet(40,53),ActorRef.noSender());
+    clients.get(1).tell(new Client.AskToGet(40,53),ActorRef.noSender());
+    clients.get(2).tell(new Client.AskToGet(70,53),ActorRef.noSender());
+    clients.get(3).tell(new Client.AskToGet(40,53),ActorRef.noSender());
+    clients.get(4).tell(new Client.AskToGet(20,53),ActorRef.noSender());
 
-    System.out.println("PRESS TO END");
+    Thread.sleep(1500);
+    System.out.println("\nMULTIPLE WRITES ON THE SAME KEY. PRESS TO CONTINUE");
     System.in.read();
+
+    clients.get(0).tell(new Client.AskToUpdate(60,37,"hydrogen2"),ActorRef.noSender());
+    Thread.sleep(2);
+    clients.get(1).tell(new Client.AskToUpdate(60,37,"hydrogen2"),ActorRef.noSender());
+    clients.get(2).tell(new Client.AskToUpdate(30,37,"hydrogen2"),ActorRef.noSender());
+    clients.get(3).tell(new Client.AskToUpdate(100,37,"hydrogen2"),ActorRef.noSender());
+    clients.get(4).tell(new Client.AskToUpdate(50,37,"hydrogen2"),ActorRef.noSender());
+
+    Thread.sleep(1500);
+    System.out.println("\nPRESS TO SEE THE RESULT");
+    System.in.read();
+
+    for(ActorRef a : group.values()){
+      a.tell(p,ActorRef.noSender());
+    }
+
+    Thread.sleep(100);
+    System.out.println("\nONE UPDATE MULTIPLE GETS ON THE SAME KEY. PRESS TO CONTINUE");
+    System.in.read();
+
+    clients.get(0).tell(new Client.AskToGet(40,83),ActorRef.noSender());
+    clients.get(1).tell(new Client.AskToGet(40,83),ActorRef.noSender());
+    clients.get(2).tell(new Client.AskToGet(20,83),ActorRef.noSender());
+    clients.get(3).tell(new Client.AskToUpdate(90,83,"granite2"),ActorRef.noSender());
+    clients.get(4).tell(new Client.AskToGet(70,83),ActorRef.noSender());
+
+    Thread.sleep(1500);
+    System.out.println("\nPRESS TO SEE THE RESULT");
+    System.in.read();
+
+    for(ActorRef a : group.values()){
+      a.tell(p,ActorRef.noSender());
+    }
+
+    Thread.sleep(100);
+    System.out.println("\nPRESS TO END");
+    System.in.read();
+
+
 
 
     // Send join messages to the banks to inform them of the whole group
@@ -75,4 +118,6 @@ public class Project {
 
     system.terminate();
   }
+
+
 }

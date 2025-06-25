@@ -4,6 +4,7 @@ import akka.actor.AbstractActor;
 import akka.actor.ActorRef;
 import akka.actor.Props;
 import scala.concurrent.duration.Duration;
+import scala.concurrent.duration.FiniteDuration;
 
 import java.io.Serializable;
 import java.util.*;
@@ -11,10 +12,10 @@ import java.util.concurrent.TimeUnit;
 
 public class Node extends AbstractActor {
     final int ringNum;
-    final int W;
-    final int R;
-    final int N;
-    final Duration TIMEOUT;
+    final int W_QUORUM;
+    final int R_QUORUM;
+    final int N_REPLICAS;
+    final FiniteDuration TIMEOUT;
     SortedMap<Integer,ActorRef> group;
     Map<Integer,Element> data;
     Map<Integer,Map<NodeGet,GetRequestTracker>> coordGetList;
@@ -25,9 +26,9 @@ public class Node extends AbstractActor {
     // Constructors
     public Node (int ringNum, int replFactor, int r, int w, int timeout) {
         this.ringNum = ringNum;
-        N = replFactor;
-        R = r;
-        W = w;
+        N_REPLICAS = replFactor;
+        R_QUORUM = r;
+        W_QUORUM = w;
         TIMEOUT = Duration.create(timeout,TimeUnit.MILLISECONDS);
         group = new TreeMap<>();
         data = new HashMap<>();
@@ -46,21 +47,25 @@ public class Node extends AbstractActor {
         int nSuccess;
         int nFail;
         int nonExistent;
-        Element el;
+        Element elem;
         public GetRequestTracker(){
             nSuccess = 0;
             nFail = 0;
             nonExistent = 0;
-            el = null;
+            elem = null;
         }
     }
 
     static public class UpdateRequestTracker {
-        NodeUpdate m;
+        String data ;
+        NodeUpdate nu;
+        int version;
         int nSuccess;
         int nFail;
-        public UpdateRequestTracker(NodeUpdate m){
-            this.m = m;
+        public UpdateRequestTracker(String data, NodeUpdate nu){
+            this.data = data;
+            this.nu = nu;
+            version = 0;
             nSuccess = 0;
             nFail = 0;
         }
@@ -90,7 +95,10 @@ public class Node extends AbstractActor {
         }
     }
 
-    static public class Timeout implements Serializable {}
+    static public class Timeout implements Serializable {
+        Serializable m;
+        public Timeout(Serializable m){ this.m = m; }
+    }
 
     static public class NodeGet implements Serializable{
         int id;
@@ -116,10 +124,10 @@ public class Node extends AbstractActor {
 
     static public class OkGet implements Serializable{
         NodeGet req;
-        Element el;
-        public OkGet(NodeGet req, Element el) {
+        Element elem;
+        public OkGet(NodeGet req, Element elem) {
             this.req = req;
-            this.el = el;
+            this.elem = elem;
         }
     }
 
@@ -144,10 +152,10 @@ public class Node extends AbstractActor {
 
     static public class CommitUpdate implements Serializable {
         NodeUpdate req;
-        Element element;
+        Element elem;
         public CommitUpdate(NodeUpdate req, Element el) {
             this.req = req;
-            this.element = el;
+            this.elem = el;
         }
     }
 
@@ -161,48 +169,46 @@ public class Node extends AbstractActor {
     //---------------------------------------------------------------------------------
     // Helper functions
 
-    private void transmitWithRingNumber(int node, Serializable el) {
+    private void transmitWithRingNumber(int node, Serializable mess) {
         if(node == ringNum) {
-            getSelf().tell(el,getSelf());
+            getSelf().tell(mess,getSelf());
         } else {
             int delay = (int) (Math.random()*10) + 10;
             getContext().system().scheduler().scheduleOnce(
                     Duration.create(delay,TimeUnit.MILLISECONDS),
                     group.get(node),
-                    el,
+                    mess,
                     getContext().system().dispatcher(),
                     getSelf()
             );
         }
     }
 
-    private void transmitWithActorRef(ActorRef ar, Serializable el) {
+    private void transmitWithActorRef(ActorRef ar, Serializable mess) {
         if(ar == getSelf()) {
-            getSelf().tell(el,getSelf());
+            getSelf().tell(mess,getSelf());
         } else {
             int delay = (int) (Math.random()*10) + 10;
             getContext().system().scheduler().scheduleOnce(
                     Duration.create(delay,TimeUnit.MILLISECONDS),
                     ar,
-                    el,
+                    mess,
                     getContext().system().dispatcher(),
                     getSelf()
             );
         }
     }
 
-    private void sendToNodes(int elemKey, Serializable el) {
-        int toContact = N;
+    private void sendToNodes(int elemKey, Serializable mess) {
+        int toContact = N_REPLICAS;
         for(int node : group.tailMap(elemKey).keySet()){
-            System.out.println(node);
-            transmitWithRingNumber(node,el);
+            transmitWithRingNumber(node,mess);
             toContact--;
             if(toContact == 0){ break; }
         }
         if(toContact > 0){
             for(int node : group.keySet()){
-                System.out.println(node);
-                transmitWithRingNumber(node,el);
+                transmitWithRingNumber(node,mess);
                 toContact--;
                 if(toContact == 0){ break; }
             }
@@ -215,76 +221,194 @@ public class Node extends AbstractActor {
         group.putAll(el.group);
     }
 
-    private void onGet (Get el) {
-        NodeGet ng = new NodeGet(0, el.elemKey, getSender());
-        coordGetList.putIfAbsent(el.elemKey,new HashMap<>());
+    private void onGet (Get getMess) {
+        NodeGet ng = new NodeGet(0, getMess.elemKey, getSender());
+        coordGetList.putIfAbsent(getMess.elemKey,new HashMap<>());
 
-        if(coordUpdateList.containsKey(el.elemKey)){
+        if(coordUpdateList.containsKey(getMess.elemKey)){
             getSender().tell(new Client.Result(
-                    "Get " + el.elemKey +
-                    ": Failure - The coordinator is already processing an update"
+                    "Get " + getMess.elemKey +
+                    ": The coordinator is already processing an update on the same key"
             ),getSelf());
             return;
         }
 
-        coordGetList.get(el.elemKey).put(ng,new GetRequestTracker());
+        coordGetList.get(getMess.elemKey).put(ng,new GetRequestTracker());
 
-        sendToNodes(el.elemKey,ng);
+        sendToNodes(getMess.elemKey,ng);
+        getContext().system().scheduler().scheduleOnce(
+                TIMEOUT,
+                getSelf(),
+                new Timeout(ng),
+                getContext().system().dispatcher(),
+                getSelf()
+        );
     }
 
-    private void onUpdate (Update el) {}
+    private void onUpdate (Update updMess) {
+        NodeUpdate nu = new NodeUpdate(0,updMess.elemKey,getSender());
 
-    private void onTimeout (Timeout el){}
+        if(coordUpdateList.putIfAbsent(
+                updMess.elemKey, new UpdateRequestTracker(updMess.data,nu)) != null)
+        {
+            //System.out.println(ringNum+": ALREADY PROCESSING");
+            getSender().tell(new Client.Result(
+                    "Update " + updMess.elemKey +
+                    ": The coordinator is already processing an update on the same key"
+            ), getSender());
+            return;
+        }
+        //System.out.println(ringNum+": LET'S SEND UPDATE");
+        sendToNodes(updMess.elemKey,nu);
+        getContext().system().scheduler().scheduleOnce(
+                TIMEOUT,
+                getSelf(),
+                new Timeout(nu),
+                getContext().system().dispatcher(),
+                getSelf()
+        );
+    }
 
-    private void onNodeGet (NodeGet el) {
-        if(nodeUpdateList.containsKey(el.elemKey)){
-            transmitWithActorRef(getSender(), new BadGet(el));
-        } else {
-            transmitWithActorRef(getSender(),new OkGet(el,data.get(el.elemKey)));
+    private void onTimeout (Timeout timeout){
+        if(timeout.m instanceof NodeGet ng){
+            GetRequestTracker t = coordGetList.get(ng.elemKey).remove(ng);
+            if(t == null) return;
+            transmitWithActorRef(
+                    ng.client,
+                    new Client.Result("Get " + ng.elemKey + ": Timed out. Cannot reach quorum")
+            );
+        } else if(timeout.m instanceof NodeUpdate nu){
+            UpdateRequestTracker tracker = coordUpdateList.get(nu.elemKey);
+
+            if(tracker == null || !tracker.nu.equals(nu)) return;
+
+            coordUpdateList.remove(nu.elemKey);
+            transmitWithActorRef(
+                    nu.client,
+                    new Client.Result("Update " + nu.elemKey
+                            + ": Timed out. Cannot reach quorum")
+            );
+            sendToNodes(nu.elemKey, new AbortUpdate(nu));
         }
     }
 
-    private void onNodeUpdate (NodeUpdate el) {}
+    private void onNodeGet (NodeGet ng) {
+        if(nodeUpdateList.containsKey(ng.elemKey)){
+            transmitWithActorRef(getSender(), new BadGet(ng));
+        } else {
+            transmitWithActorRef(getSender(),new OkGet(ng,data.get(ng.elemKey)));
+        }
+    }
 
-    private void onOkGet (OkGet el) {
-        GetRequestTracker tracker = coordGetList.get(el.req.elemKey).get(el.req);
+    private void onNodeUpdate (NodeUpdate nu) {
+        if(nodeUpdateList.putIfAbsent(nu.elemKey,nu) != null){
+            //System.out.println(ringNum+": BAD FOR ME");
+            transmitWithActorRef(getSender(),new BadUpdate(nu));
+            return;
+        }
+        Element e = data.get(nu.elemKey);
+        int ver = e == null ? 0 : e.version;
+        transmitWithActorRef(getSender(),new OkUpdate(nu,ver));
+        //System.out.println(ringNum+": GOOD FOR ME");
+    }
+
+    private void onOkGet (OkGet okMess) {
+        GetRequestTracker tracker = coordGetList.get(okMess.req.elemKey).get(okMess.req);
         if(tracker == null) return;
 
-        if(el.el == null) {
+        if(okMess.elem == null) {
             tracker.nonExistent++;
-            if(tracker.nonExistent > R){
+            if(tracker.nonExistent >= R_QUORUM){
+                coordGetList.get(okMess.req.elemKey).remove(okMess.req);
                 transmitWithActorRef(
-                        el.req.client,
-                        new Client.Result("Get: No element with key " + el.req.elemKey + " exists")
+                        okMess.req.client,
+                        new Client.Result(
+                                "Get " + okMess.req.elemKey + ": No element with such key exists"
+                        )
                 );
-                coordGetList.get(el.req.elemKey).remove(el.req);
             }
         }
         else{
             tracker.nSuccess++;
-            if(tracker.el == null) tracker.el = el.el;
-            else if(tracker.el.version < el.el.version){
-                tracker.el = el.el;
+            if(tracker.elem == null) tracker.elem = okMess.elem;
+            else if(tracker.elem.version < okMess.elem.version){
+                tracker.elem = okMess.elem;
             }
-            if(tracker.nonExistent + tracker.nSuccess > R){
+            if(tracker.nonExistent + tracker.nSuccess >= R_QUORUM){
+                coordGetList.get(okMess.req.elemKey).remove(okMess.req);
                 transmitWithActorRef(
-                        el.req.client,
-                        new Client.Result("Get: " + el.el)
+                        okMess.req.client,
+                        new Client.Result("Get " + okMess.req.elemKey + ": " + okMess.elem)
                 );
-                coordGetList.get(el.req.elemKey).remove(el.req);
             }
         }
     }
 
-    private void onBadGet (BadGet el) {}
+    private void onBadGet (BadGet badMess) {
+        GetRequestTracker tracker = coordGetList.get(badMess.req.elemKey).get(badMess.req);
+        if(tracker == null) return;
 
-    private void onOkUpdate (OkUpdate el) {}
+        tracker.nFail++;
+        if(tracker.nFail >= R_QUORUM){
+            coordGetList.get(badMess.req.elemKey).remove(badMess.req);
+            transmitWithActorRef(
+                    badMess.req.client,
+                    new Client.Result("Get " + badMess.req.elemKey +
+                            ": Can't get value because an update is still running")
+            );
+        }
+    }
 
-    private void onBadUpdate (BadUpdate el) {}
+    private void onOkUpdate (OkUpdate okMess) {
+        UpdateRequestTracker tracker = coordUpdateList.get(okMess.req.elemKey);
 
-    private void onCommitUpdate (CommitUpdate el) {}
+        if(tracker == null || !tracker.nu.equals(okMess.req)) return;
 
-    private void onAbortupdate (AbortUpdate el) {}
+        tracker.nSuccess++;
+        tracker.version = Math.max(tracker.version, okMess.version);
+        //System.out.println(ringNum+": OKMESS - " + tracker);
+        if(tracker.nSuccess >= W_QUORUM){
+            coordUpdateList.remove(okMess.req.elemKey);
+            transmitWithActorRef(
+                    okMess.req.client,
+                    new Client.Result("Update " + okMess.req.elemKey
+                    + ": Successful update with new version " + (tracker.version + 1))
+            );
+            sendToNodes(okMess.req.elemKey,new CommitUpdate(
+                    okMess.req,
+                    new Element(okMess.req.elemKey,tracker.data,tracker.version + 1)
+            ));
+        }
+    }
+
+    private void onBadUpdate (BadUpdate badMess) {
+        UpdateRequestTracker tracker = coordUpdateList.get(badMess.req.elemKey);
+
+        if(tracker == null || !tracker.nu.equals(badMess.req)) return;
+
+        tracker.nFail++;
+        //System.out.println(ringNum+": OKMESS - " + tracker);
+        if(tracker.nFail >= W_QUORUM){
+            coordUpdateList.remove(badMess.req.elemKey);
+            transmitWithActorRef(
+                    badMess.req.client,
+                    new Client.Result("Update " + badMess.req.elemKey
+                    + ": Failure as there is a concurrent write running")
+            );
+            sendToNodes(badMess.req.elemKey, new AbortUpdate(badMess.req));
+        }
+    }
+
+    private void onCommitUpdate (CommitUpdate commitMess) {
+        //System.out.println(ringNum+": UPDATED");
+        data.put(commitMess.req.elemKey,commitMess.elem);
+        nodeUpdateList.remove(commitMess.req.elemKey,commitMess.req);
+    }
+
+    private void onAbortUpdate (AbortUpdate abortMess) {
+        //System.out.println(ringNum+": RELEASE");
+        nodeUpdateList.remove(abortMess.req.elemKey,abortMess.req);
+    }
 
     private void onPrint (Print el) {
         System.out.println("Node" + ringNum + ": " + data);
@@ -306,7 +430,7 @@ public class Node extends AbstractActor {
                 .match(OkUpdate.class,this::onOkUpdate)
                 .match(BadUpdate.class,this::onBadUpdate)
                 .match(CommitUpdate.class,this::onCommitUpdate)
-                .match(AbortUpdate.class,this::onAbortupdate)
+                .match(AbortUpdate.class,this::onAbortUpdate)
                 .match(Print.class,this::onPrint)
                 .build();
     }

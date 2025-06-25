@@ -76,10 +76,13 @@ public class Client extends AbstractActor {
         if(node == null){
             System.out.println(name + " : No node with key " + ask.node);
             isBusy = false;
-        } //else {}
+        } else {
+            node.tell(new Node.Update(ask.elemKey,ask.value),getSelf());
+        }
     }
 
     private void onResult (Result res) {
+        isBusy = false;
         System.out.println(name + " " + res.res);
     }
 
