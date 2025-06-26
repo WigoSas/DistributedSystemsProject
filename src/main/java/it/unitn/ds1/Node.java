@@ -101,22 +101,18 @@ public class Node extends AbstractActor {
     }
 
     static public class NodeGet implements Serializable{
-        int id;
         int elemKey;
         ActorRef client;
-        public NodeGet(int id, int elemKey, ActorRef client) {
-            this.id = id;
+        public NodeGet(int elemKey, ActorRef client) {
             this.elemKey = elemKey;
             this.client = client;
         }
     }
 
     static public class NodeUpdate implements Serializable{
-        int id;
         int elemKey;
         ActorRef client;
-        public NodeUpdate(int id, int elemKey, ActorRef client) {
-            this.id = id;
+        public NodeUpdate(int elemKey, ActorRef client) {
             this.elemKey = elemKey;
             this.client = client;
         }
@@ -222,7 +218,7 @@ public class Node extends AbstractActor {
     }
 
     private void onGet (Get getMess) {
-        NodeGet ng = new NodeGet(0, getMess.elemKey, getSender());
+        NodeGet ng = new NodeGet(getMess.elemKey, getSender());
         coordGetList.putIfAbsent(getMess.elemKey,new HashMap<>());
 
         if(coordUpdateList.containsKey(getMess.elemKey)){
@@ -246,19 +242,17 @@ public class Node extends AbstractActor {
     }
 
     private void onUpdate (Update updMess) {
-        NodeUpdate nu = new NodeUpdate(0,updMess.elemKey,getSender());
+        NodeUpdate nu = new NodeUpdate(updMess.elemKey,getSender());
 
         if(coordUpdateList.putIfAbsent(
                 updMess.elemKey, new UpdateRequestTracker(updMess.data,nu)) != null)
         {
-            //System.out.println(ringNum+": ALREADY PROCESSING");
             getSender().tell(new Client.Result(
                     "Update " + updMess.elemKey +
                     ": The coordinator is already processing an update on the same key"
             ), getSender());
             return;
         }
-        //System.out.println(ringNum+": LET'S SEND UPDATE");
         sendToNodes(updMess.elemKey,nu);
         getContext().system().scheduler().scheduleOnce(
                 TIMEOUT,
@@ -302,14 +296,12 @@ public class Node extends AbstractActor {
 
     private void onNodeUpdate (NodeUpdate nu) {
         if(nodeUpdateList.putIfAbsent(nu.elemKey,nu) != null){
-            //System.out.println(ringNum+": BAD FOR ME");
             transmitWithActorRef(getSender(),new BadUpdate(nu));
             return;
         }
         Element e = data.get(nu.elemKey);
         int ver = e == null ? 0 : e.version;
         transmitWithActorRef(getSender(),new OkUpdate(nu,ver));
-        //System.out.println(ringNum+": GOOD FOR ME");
     }
 
     private void onOkGet (OkGet okMess) {
@@ -366,7 +358,6 @@ public class Node extends AbstractActor {
 
         tracker.nSuccess++;
         tracker.version = Math.max(tracker.version, okMess.version);
-        //System.out.println(ringNum+": OKMESS - " + tracker);
         if(tracker.nSuccess >= W_QUORUM){
             coordUpdateList.remove(okMess.req.elemKey);
             transmitWithActorRef(
@@ -387,7 +378,6 @@ public class Node extends AbstractActor {
         if(tracker == null || !tracker.nu.equals(badMess.req)) return;
 
         tracker.nFail++;
-        //System.out.println(ringNum+": OKMESS - " + tracker);
         if(tracker.nFail >= W_QUORUM){
             coordUpdateList.remove(badMess.req.elemKey);
             transmitWithActorRef(
@@ -400,13 +390,11 @@ public class Node extends AbstractActor {
     }
 
     private void onCommitUpdate (CommitUpdate commitMess) {
-        //System.out.println(ringNum+": UPDATED");
         data.put(commitMess.req.elemKey,commitMess.elem);
         nodeUpdateList.remove(commitMess.req.elemKey,commitMess.req);
     }
 
     private void onAbortUpdate (AbortUpdate abortMess) {
-        //System.out.println(ringNum+": RELEASE");
         nodeUpdateList.remove(abortMess.req.elemKey,abortMess.req);
     }
 
@@ -433,5 +421,9 @@ public class Node extends AbstractActor {
                 .match(AbortUpdate.class,this::onAbortUpdate)
                 .match(Print.class,this::onPrint)
                 .build();
+    }
+
+    public AbstractActor.Receive crashed() {
+        return receiveBuilder().build();
     }
 }

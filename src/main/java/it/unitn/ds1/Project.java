@@ -33,11 +33,11 @@ public class Project {
     System.in.read();
 
     List<ActorRef> clients = new ArrayList<>();
-    for(int i=1; i<=N_CLIENTS; i++){
+    for(int i=0; i<N_CLIENTS; i++){
       clients.add(system.actorOf(Client.props(group,"CLIENT"+i)));
     }
 
-    Thread.sleep(1500);
+    Thread.sleep(100);
     System.out.println("\nMULTIPLE CONCURRENT UPDATES ON DIFFERENT KEYS. PRESS TO CONTINUE");
     System.in.read();
 
@@ -70,12 +70,12 @@ public class Project {
     System.out.println("\nMULTIPLE WRITES ON THE SAME KEY. PRESS TO CONTINUE");
     System.in.read();
 
-    clients.get(0).tell(new Client.AskToUpdate(60,37,"hydrogen2"),ActorRef.noSender());
-    Thread.sleep(2);
-    clients.get(1).tell(new Client.AskToUpdate(60,37,"hydrogen2"),ActorRef.noSender());
+    clients.get(0).tell(new Client.AskToUpdate(60,37,"hydrogen0"),ActorRef.noSender());
+    //Thread.sleep(2);
+    clients.get(1).tell(new Client.AskToUpdate(60,37,"hydrogen1"),ActorRef.noSender());
     clients.get(2).tell(new Client.AskToUpdate(30,37,"hydrogen2"),ActorRef.noSender());
-    clients.get(3).tell(new Client.AskToUpdate(100,37,"hydrogen2"),ActorRef.noSender());
-    clients.get(4).tell(new Client.AskToUpdate(50,37,"hydrogen2"),ActorRef.noSender());
+    clients.get(3).tell(new Client.AskToUpdate(100,37,"hydrogen3"),ActorRef.noSender());
+    clients.get(4).tell(new Client.AskToUpdate(50,37,"hydrogen4"),ActorRef.noSender());
 
     Thread.sleep(1500);
     System.out.println("\nPRESS TO SEE THE RESULT");
@@ -90,9 +90,10 @@ public class Project {
     System.in.read();
 
     clients.get(0).tell(new Client.AskToGet(40,83),ActorRef.noSender());
-    clients.get(1).tell(new Client.AskToGet(40,83),ActorRef.noSender());
+    clients.get(1).tell(new Client.AskToUpdate(90,83,"granite+"),ActorRef.noSender());
     clients.get(2).tell(new Client.AskToGet(20,83),ActorRef.noSender());
-    clients.get(3).tell(new Client.AskToUpdate(90,83,"granite2"),ActorRef.noSender());
+    clients.get(3).tell(new Client.AskToGet(40,83),ActorRef.noSender());
+    Thread.sleep(80);
     clients.get(4).tell(new Client.AskToGet(70,83),ActorRef.noSender());
 
     Thread.sleep(1500);
@@ -106,15 +107,6 @@ public class Project {
     Thread.sleep(100);
     System.out.println("\nPRESS TO END");
     System.in.read();
-
-
-
-
-    // Send join messages to the banks to inform them of the whole group
-    //JoinGroupMsg start = new JoinGroupMsg(group);
-    //for (ActorRef peer: group) {
-    //  peer.tell(start, ActorRef.noSender());
-    //}
 
     system.terminate();
   }
